@@ -1,160 +1,194 @@
+-- The only module that shells out to kubectl. Everything here is async
+-- (vim.system) so a live dashboard never blocks the editor. Callbacks always
+-- receive (result, err) and are scheduled on the main loop.
 local M = {}
 
---- Execute system command safely
--- @param cmd string: command to execute
--- @return string|nil: command output or nil on error
--- @return string|nil: error message if command failed
-local function run_cmd(cmd)
-	local ok, result = pcall(vim.fn.system, cmd)
-	if not ok or vim.v.shell_error ~= 0 then
-		local error_msg = result or "Unknown error"
-		
-		-- Parse common kubectl errors
-		if error_msg:match("connection refused") then
-			error_msg = "Cannot connect to Kubernetes cluster"
-		elseif error_msg:match("context.*not found") or error_msg:match("current-context") then
-			error_msg = "No Kubernetes context configured. Run 'kubectl config get-contexts'"
-		elseif error_msg:match("forbidden") or error_msg:match("Forbidden") then
-			error_msg = "Insufficient permissions to access this resource"
-		elseif error_msg:match("not found") or error_msg:match("NotFound") then
-			error_msg = "Resource not found in cluster"
-		elseif error_msg:match("timed out") or error_msg:match("timeout") then
-			error_msg = "Request timed out. Cluster may be slow or unreachable"
+--- Translate raw kubectl stderr into something a human can act on.
+local function friendly(err)
+	err = err or ""
+	if err:match("connection refused") then
+		return "Cannot connect to the Kubernetes cluster"
+	elseif err:match("context.*not found") or err:match("current%-context") then
+		return "No context configured. Try 'kubectl config get-contexts'"
+	elseif err:match("[Ff]orbidden") then
+		return "Insufficient permissions for this resource"
+	elseif err:match("NotFound") or err:match("not found") then
+		return "Resource not found in the cluster"
+	elseif err:match("timed out") or err:match("timeout") then
+		return "Request timed out. The cluster may be slow or unreachable"
+	end
+	return (err:gsub("^%s*(.-)%s*$", "%1"))
+end
+
+--- Run kubectl with the given argv. cb(stdout, err)
+-- @param args table: argv after "kubectl"
+-- @param cb function
+function M.run(args, cb)
+	local cmd = { "kubectl" }
+	vim.list_extend(cmd, args)
+	local ok, err = pcall(vim.system, cmd, { text = true }, function(res)
+		vim.schedule(function()
+			if res.code ~= 0 then
+				cb(nil, friendly(res.stderr ~= "" and res.stderr or res.stdout))
+			else
+				cb(res.stdout, nil)
+			end
+		end)
+	end)
+	if not ok then
+		vim.schedule(function()
+			cb(nil, "kubectl is not on PATH (" .. tostring(err) .. ")")
+		end)
+	end
+end
+
+--- Run kubectl -o json and decode. cb(table, err)
+local function run_json(args, cb)
+	M.run(args, function(out, err)
+		if not out then
+			return cb(nil, err)
 		end
-		
-		return nil, error_msg
-	end
-	return result, nil
+		local ok, json = pcall(vim.json.decode, out)
+		if not ok or type(json) ~= "table" then
+			return cb(nil, "Could not parse kubectl output")
+		end
+		cb(json, nil)
+	end)
 end
 
---- Check if kubectl is available
--- @return boolean: true if kubectl is available
--- @return string|nil: error message if not available
-function M.check_kubectl_available()
-	local result, err = run_cmd("kubectl version --client -o json 2>&1")
-	if not result then
-		return false, "kubectl not found in PATH or not accessible"
-	end
-	return true, nil
+--- Current context name and its default namespace, in one call.
+-- cb({ context = string, namespace = string }, err)
+function M.context_info(cb)
+	run_json({ "config", "view", "--minify", "-o", "json" }, function(json, err)
+		if not json then
+			return cb(nil, err)
+		end
+		local ctx = json.contexts and json.contexts[1]
+		cb({
+			context = ctx and ctx.name or "unknown",
+			namespace = ctx and ctx.context and ctx.context.namespace or "default",
+		}, nil)
+	end)
 end
 
---- Get current namespace from context
--- @return string: namespace name (defaults to "default" if not set)
--- @return string|nil: error message if command failed
-function M.get_current_namespace()
-	local cmd = "kubectl config view --minify -o json"
-	local result, err = run_cmd(cmd)
-	if not result then
-		return "default", err
-	end
-
-	local ok, json = pcall(vim.fn.json_decode, result)
-	if not ok or not json then
-		return "default", "Failed to parse kubectl config"
-	end
-
-	-- Extract namespace from context
-	if json.contexts and json.contexts[1] and json.contexts[1].context then
-		local namespace = json.contexts[1].context.namespace
-		return namespace or "default", nil
-	end
-
-	return "default", nil
+--- cb(list of namespace names, err)
+function M.get_namespaces(cb)
+	run_json({ "get", "namespaces", "-o", "json" }, function(json, err)
+		if not json then
+			return cb(nil, err)
+		end
+		local names = {}
+		for _, ns in ipairs(json.items or {}) do
+			table.insert(names, ns.metadata.name)
+		end
+		cb(names, nil)
+	end)
 end
 
---- Get all namespaces
--- @return table|nil: list of namespace objects or nil on error
--- @return string|nil: error message if command failed
-function M.get_namespaces()
-	local cmd = "kubectl get namespaces -o json"
-	local result, err = run_cmd(cmd)
-	if not result then
-		return nil, err
-	end
-
-	local ok, json = pcall(vim.fn.json_decode, result)
-	if not ok or not json or not json.items then
-		return nil, "Failed to parse namespaces output"
-	end
-
-	return json.items, nil
+--- cb(list of Deployment objects, err)
+function M.get_deployments(ns, cb)
+	run_json({ "get", "deployments", "-n", ns, "-o", "json" }, function(json, err)
+		cb(json and (json.items or {}) or nil, err)
+	end)
 end
 
---- Get pods from kubectl
--- @param namespace string|nil: namespace to query ("current", "all", or specific namespace)
--- @return table|nil: kubectl JSON output or nil on error
--- @return string|nil: error message if command failed
-function M.get_pods(namespace)
-	namespace = namespace or "current"
-
-	local cmd
-	if namespace == "all" then
-		cmd = "kubectl get pods --all-namespaces -o json"
-	elseif namespace == "current" then
-		cmd = "kubectl get pods -o json"
-	else
-		cmd = string.format("kubectl get pods -n %s -o json", namespace)
+--- Deployments and pods of one namespace, fetched in parallel and joined.
+-- Two calls are needed because AGE, restarts and failure reasons only exist on
+-- the pods, while images and replica counts live on the deployment.
+-- cb({ deployments = {...}, pods = {...} }, err)
+function M.snapshot(ns, cb)
+	local out, pending, first_err = {}, 2, nil
+	local function done()
+		pending = pending - 1
+		if pending > 0 then
+			return
+		end
+		if not out.deployments or not out.pods then
+			return cb(nil, first_err or "Failed to read namespace " .. ns)
+		end
+		cb(out, nil)
 	end
 
-	local result, err = run_cmd(cmd)
-	if not result then
-		return nil, err
-	end
-
-	local ok, json = pcall(vim.fn.json_decode, result)
-	if not ok or not json or not json.items then
-		return nil, "Failed to parse kubectl output"
-	end
-
-	return json, nil
+	M.get_deployments(ns, function(items, err)
+		out.deployments = items
+		first_err = first_err or err
+		done()
+	end)
+	run_json({ "get", "pods", "-n", ns, "-o", "json" }, function(json, err)
+		out.pods = json and (json.items or {}) or nil
+		first_err = first_err or err
+		done()
+	end)
 end
 
---- Restart a Kubernetes deployment
--- @param deployment_name string: name of the deployment
--- @param namespace string|nil: namespace (uses current if nil)
--- @return boolean: true if successful
--- @return string|nil: error message if failed
-function M.restart_deployment(deployment_name, namespace)
-	local cmd
-	if namespace and namespace ~= "current" then
-		cmd = string.format("kubectl rollout restart deployment %s -n %s", deployment_name, namespace)
-	else
-		cmd = string.format("kubectl rollout restart deployment %s", deployment_name)
-	end
+-- ---------------------------------------------------------------------------
+-- Mutations. All of them target deployment/<name>, never a pod.
+-- ---------------------------------------------------------------------------
 
-	local result, err = run_cmd(cmd)
-	if not result then
-		return false, err
-	end
-	return true, nil
+function M.restart(ns, name, cb)
+	M.run({ "rollout", "restart", "deployment/" .. name, "-n", ns }, cb)
 end
 
---- Update container image
--- @param deployment_name string: name of the deployment
--- @param container_name string: name of the container
--- @param new_image string: new image with tag
--- @param namespace string|nil: namespace (uses current if nil)
--- @return boolean: true if successful
--- @return string|nil: error message if failed
-function M.update_image(deployment_name, container_name, new_image, namespace)
-	local cmd
-	if namespace and namespace ~= "current" then
-		cmd = string.format(
-			"kubectl set image deployment/%s %s=%s -n %s",
-			deployment_name,
-			container_name,
-			new_image,
-			namespace
-		)
-	else
-		cmd = string.format("kubectl set image deployment/%s %s=%s", deployment_name, container_name, new_image)
-	end
+function M.scale(ns, name, replicas, cb)
+	M.run({ "scale", "deployment/" .. name, "--replicas=" .. replicas, "-n", ns }, cb)
+end
 
-	local result, err = run_cmd(cmd)
-	if not result then
-		return false, err
+function M.set_image(ns, name, container, image, cb)
+	M.run({ "set", "image", "deployment/" .. name, container .. "=" .. image, "-n", ns }, cb)
+end
+
+function M.describe(ns, name, cb)
+	M.run({ "describe", "deployment/" .. name, "-n", ns }, cb)
+end
+
+function M.events(ns, name, cb)
+	M.run({
+		"events",
+		"-n",
+		ns,
+		"--for",
+		"deployment/" .. name,
+	}, cb)
+end
+
+--- Build the argv for a log stream. Kept here so k8s_client stays the single
+-- place that knows kubectl's surface; ui/logs.lua only runs it.
+function M.logs_cmd(ns, pod, container, tail)
+	local cmd = { "kubectl", "logs", "-f", "--tail", tostring(tail), pod, "-n", ns }
+	if container then
+		vim.list_extend(cmd, { "-c", container })
 	end
-	return true, nil
+	return cmd
+end
+
+--- Newest running pod of a deployment, for log streaming. cb(pod_name, err)
+function M.newest_pod(ns, name, cb)
+	M.snapshot(ns, function(snap, err)
+		if not snap then
+			return cb(nil, err)
+		end
+		local deploy
+		for _, d in ipairs(snap.deployments) do
+			if d.metadata.name == name then
+				deploy = d
+				break
+			end
+		end
+		if not deploy then
+			return cb(nil, "Deployment " .. name .. " does not exist in " .. ns)
+		end
+		local pods = require("kubectl.format").select_pods(snap.pods, deploy.spec.selector.matchLabels)
+		local newest
+		for _, p in ipairs(pods) do
+			if not newest or p.metadata.creationTimestamp > newest.metadata.creationTimestamp then
+				newest = p
+			end
+		end
+		if not newest then
+			return cb(nil, name .. " has no pods (scaled to 0?)")
+		end
+		cb(newest.metadata.name, nil)
+	end)
 end
 
 return M

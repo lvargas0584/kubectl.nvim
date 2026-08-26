@@ -1,314 +1,204 @@
-*kubectl.txt*  Kubernetes pod management for Neovim
+*kubectl.txt*  Un dashboard de Kubernetes en una sola pantalla
+
+Author:  Leonardo Vargas
+License: MIT
 
 ==============================================================================
-TABLE OF CONTENTS                                         *kubectl-contents*
+CONTENIDO                                                     *kubectl-contents*
 
-    1. Introduction ......................... |kubectl-introduction|
-    2. Requirements ......................... |kubectl-requirements|
-    3. Commands ............................. |kubectl-commands|
-    4. Configuration ........................ |kubectl-configuration|
-    5. Keymaps .............................. |kubectl-keymaps|
-    6. Features ............................. |kubectl-features|
-    7. FAQ .................................. |kubectl-faq|
-    8. License .............................. |kubectl-license|
-
-==============================================================================
-1. INTRODUCTION                                       *kubectl-introduction*
-
-kubectl.nvim is a Neovim plugin that provides an interactive interface for
-managing Kubernetes pods using Telescope. It offers features like pod listing,
-log viewing, deployment restarts, and image updates, all within Neovim.
-
-Key features:
-  • Interactive pod selection with Telescope picker
-  • Smart caching to reduce kubectl API calls
-  • Namespace toggling (current / all namespaces)
-  • Log viewing in tmux splits or Neovim buffers
-  • Deployment restart and image update actions
-  • Real-time log streaming with follow mode
+  1. Introducción ............................... |kubectl-intro|
+  2. Requisitos ................................. |kubectl-requirements|
+  3. Instalación ................................ |kubectl-install|
+  4. Uso ........................................ |kubectl-usage|
+  5. Atajos ..................................... |kubectl-mappings|
+  6. Configuración .............................. |kubectl-config|
+  7. Watchlist .................................. |kubectl-watchlist|
+  8. API de Lua ................................. |kubectl-api|
 
 ==============================================================================
-2. REQUIREMENTS                                       *kubectl-requirements*
+1. INTRODUCCIÓN                                                  *kubectl-intro*
 
-  • Neovim 0.5 or later
-  • telescope.nvim plugin
-  • kubectl CLI tool installed and configured
-  • tmux (optional, only required for tmux log mode)
+kubectl.nvim es un dashboard de Kubernetes al estilo de lazygit: una sola
+pantalla persistente en lugar de un comando por operación.
 
-==============================================================================
-3. COMMANDS                                               *kubectl-commands*
+En vez de listar todos los pods de un namespace, mantienes una *watchlist*
+con los deployments con los que realmente trabajas. La fila enfocada es el
+sujeto implícito de cada acción: reiniciar, escalar, cambiar imagen o versión,
+ver logs. Todo con el teclado y con confirmación previa.
 
-                                                          *:KubectlPods*
-:lua require('kubectl').list_pods()
-    Opens a Telescope picker with all pods in the current or all namespaces.
-    Use this to view pod status, logs, restart deployments, or update images.
-
-                                                    *:KubectlSelectNamespace*
-:lua require('kubectl').select_namespace()
-    Opens a Telescope picker to select a specific namespace. After selecting,
-    the pod list will show pods from that namespace only.
-
-                                                          *kubectl.setup()*
-require('kubectl').setup({config})
-    Configures the plugin. All options are optional. See |kubectl-configuration|
-    for available configuration options.
+Los namespaces conviven en la misma pantalla: si sigues deployments en `qa` y
+en `dev`, los ves a la vez y no hay que cambiar de contexto para mirar cada uno.
 
 ==============================================================================
-4. CONFIGURATION                                     *kubectl-configuration*
+2. REQUISITOS                                             *kubectl-requirements*
 
-Call the setup function with your desired configuration:
->
+  - Neovim 0.10 o superior (usa |vim.system()|)
+  - `kubectl` en el PATH y configurado contra un cluster
+  - tmux (opcional, solo para el atajo `T`)
+
+Telescope ya no es necesario. Si tienes un manejador de |vim.ui.select()|
+instalado, los diálogos de "añadir deployment" y "elegir namespace" lo usan
+automáticamente.
+
+==============================================================================
+3. INSTALACIÓN                                                 *kubectl-install*
+
+Con lazy.nvim: >lua
+
+    {
+      'levargas0584/kubectl.nvim',
+      cmd = 'Kubectl',
+      config = function()
+        require('kubectl').setup()
+      end,
+    }
+<
+==============================================================================
+4. USO                                                           *kubectl-usage*
+
+                                                                      *:Kubectl*
+:Kubectl        Abre o cierra el dashboard.
+
+Con la watchlist vacía, la pantalla te indica que pulses `a` para añadir tu
+primer deployment. Pulsa `?` en cualquier momento para ver los atajos.
+
+Un mapeo cómodo: >lua
+
+    vim.keymap.set('n', '<leader>k', '<cmd>Kubectl<cr>', { desc = 'Kubernetes' })
+<
+COLUMNAS
+
+  NS          Namespace del deployment.
+  DEPLOYMENT  Nombre del deployment.
+  VAR         Variante de la imagen: `jvm`, `native` o `-`. Se deduce del
+              sufijo del repositorio (`app_jvm`, `app-native`).
+  VERSION     Etiqueta de la imagen (`dev_1.4.2`, `feature_RPLAT-32456`).
+  READY       Réplicas listas / deseadas.
+  AGE         Edad del pod más nuevo, no la del deployment: es la señal de que
+              un reinicio se aplicó de verdad.
+  RST         Reinicios (el máximo entre los pods del deployment).
+
+Las filas con problemas se resaltan y muestran el motivo al final
+(`ImagePullBackOff`, `CrashLoopBackOff`, `NotFound`...). Ver un error de
+despliegue no requiere ir a buscarlo.
+
+==============================================================================
+5. ATAJOS                                                     *kubectl-mappings*
+
+EN LA WATCHLIST~
+
+  <CR>    Logs en el panel activo
+  o       Logs en un panel NUEVO (se pueden ver varios a la vez)
+  <Tab>   Ir al área de logs
+  a       Añadir un deployment a la watchlist
+  d       Quitarlo de la watchlist                        (confirma)
+  R       rollout restart                                 (confirma)
+  i       Editar la imagen completa                       (confirma)
+  v       Editar solo la etiqueta de versión              (confirma)
+  s       Escalar a N réplicas                            (confirma)
+  0       Escalar a 0                                     (confirma)
+  n       Cambiar el namespace por defecto
+  e       Eventos del deployment
+  K       describe: imagen completa, condiciones, réplicas
+  T       Abrir los logs en un panel de tmux
+  r       Refrescar ahora
+  ?       Ayuda
+  q       Cerrar el dashboard
+
+Las confirmaciones tienen "No" como opción por defecto, así que un <CR>
+accidental nunca dispara una acción. Ver |kubectl-config| para desactivarlas.
+
+EN UN PANEL DE LOGS~
+
+  /  n  N   Búsqueda nativa de Neovim
+  g         Filtrar el stream: `kubectl logs -f | grep PALABRA`
+  t         Cambiar `--tail N`
+  f         Alternar follow (auto-scroll)
+  x         Cerrar este panel y matar su stream
+  <C-c>     Parar el stream sin cerrar el panel
+  <Tab>     Volver a la watchlist
+
+Las acciones que no dependen de la fila enfocada (`a`, `n`, `r`, `?`) también
+están mapeadas en los paneles de logs, así que puedes añadir un deployment o
+refrescar sin volver antes a la watchlist.
+
+CAMBIAR DE VERSIÓN~
+
+Dos teclas según cuánto cambie:
+
+  v   Pasas de `dev_1.4.2` a `feature_RPLAT-32456`. El prompt viene relleno
+      solo con la etiqueta; el repositorio se conserva.
+  i   Pasas de `app_jvm:dev_1.4.2` a `app_native:1.2.0`. El prompt viene
+      relleno con la referencia completa para editar las dos mitades.
+
+Ambas muestran el antes y el después en la confirmación.
+
+==============================================================================
+6. CONFIGURACIÓN                                                *kubectl-config*
+
+                                                              *kubectl.setup()*
+Todas las opciones son opcionales. Estos son los valores por defecto: >lua
+
     require('kubectl').setup({
-      -- Logging & Notifications
-      log_level = vim.log.levels.INFO,
-      notify_timeout = 5000,
-
-      -- Tmux Integration
+      layout = 'tab',
+      watchlist_width = 'auto',
+      auto_refresh = 15,
+      log_tail = 200,
+      log_max_lines = 10000,
+      log_follow = true,
+      confirm_actions = true,
       tmux_split_cmd = "tmux split-window -h '%s; read'",
-
-      -- Cache Settings
-      cache_ttl = 30,              -- Cache duration in seconds
-      auto_refresh = true,         -- Enable background refresh
-      auto_refresh_interval = 30,  -- Refresh interval in seconds
-
-      -- Log Output
-      log_output = "tmux",         -- "tmux" | "buffer"
-      log_buffer_split = "vsplit", -- "vsplit" | "split" | "tabnew"
-      log_follow_mode = true,      -- Auto-scroll logs to end
-
-      -- Namespace Settings
-      namespace_mode = "current",  -- "current" | "all"
-
-      -- UI Display
-      show_restart_count = true,
-      display_format = {
-        pod_name_width = 40,
-        image_width = 50,
-        status_width = 10,
-        age_width = 8,
-        restarts_width = 8,
-        namespace_width = 15,
-      },
     })
 <
+  layout ~
+      "tab" abre el dashboard en su propia pestaña; "split" lo coloca junto al
+      buffer en el que estás.
 
-Configuration Options: ~
+  watchlist_width ~
+      "auto" ajusta el ancho a las columnas renderizadas. También acepta un
+      número. En ambos casos se limita al 60% del ancho de la pestaña para que
+      el panel de logs siga siendo usable.
 
-*kubectl-config-log_level*
-log_level
-    Log level for plugin messages. Default: `vim.log.levels.INFO`
-    Values: vim.log.levels.{DEBUG|INFO|WARN|ERROR}
+  auto_refresh ~
+      Segundos entre refrescos automáticos. 0 desactiva el temporizador; `r`
+      sigue refrescando a mano.
 
-*kubectl-config-notify_timeout*
-notify_timeout
-    Duration (ms) for notification messages. Default: 5000
+  log_tail ~
+      Valor inicial de `--tail` al abrir un panel. Se cambia en caliente con `t`.
 
-*kubectl-config-tmux_split_cmd*
-tmux_split_cmd
-    Command template for tmux splits. Default: "tmux split-window -h '%s; read'"
-    The '%s' will be replaced with the kubectl logs command.
+  log_max_lines ~
+      Tope de líneas por panel. Al superarlo se descartan las más antiguas.
 
-*kubectl-config-cache_ttl*
-cache_ttl
-    Cache duration in seconds. Default: 30
-    Cached data is invalidated after this time or when using force refresh.
+  confirm_actions ~
+      false salta todas las confirmaciones. No recomendado.
 
-*kubectl-config-auto_refresh*
-auto_refresh
-    Enable automatic background refresh. Default: true
-
-*kubectl-config-auto_refresh_interval*
-auto_refresh_interval
-    Seconds between automatic refreshes. Default: 30
-
-*kubectl-config-log_output*
-log_output
-    Where to display logs. Default: "tmux"
-    Values: "tmux" | "buffer"
-    - "tmux": Opens logs in a tmux split (requires tmux)
-    - "buffer": Opens logs in a Neovim buffer
-
-*kubectl-config-log_buffer_split*
-log_buffer_split
-    How to split when opening log buffers. Default: "vsplit"
-    Values: "vsplit" | "split" | "tabnew"
-
-*kubectl-config-log_follow_mode*
-log_follow_mode
-    Auto-scroll logs to end. Default: true
-
-*kubectl-config-namespace_mode*
-namespace_mode
-    Initial namespace view mode. Default: "current"
-    Values: "current" | "all" | "specific"
-    - "current": Show pods in the current context namespace
-    - "all": Show pods across all namespaces
-    - "specific": Show pods in a user-selected namespace
-    Can be toggled with <C-n> or set with <C-s> in the picker.
-
-*kubectl-config-show_restart_count*
-show_restart_count
-    Show restart count column. Default: true
-
-*kubectl-config-display_format*
-display_format
-    Column widths for the picker display. Default:
-    {
-      pod_name_width = 40,
-      image_width = 50,
-      status_width = 10,
-      age_width = 8,
-      restarts_width = 8,
-      namespace_width = 15,
-    }
+  tmux_split_cmd ~
+      Solo lo usa el atajo `T`. `%s` se sustituye por el comando de logs.
 
 ==============================================================================
-5. KEYMAPS                                                 *kubectl-keymaps*
+7. WATCHLIST                                                 *kubectl-watchlist*
 
-Telescope Picker Keymaps ~
-                                                          *kubectl-<CR>*
-<CR>        View logs for the selected pod/container
-            Opens in tmux split or buffer depending on configuration.
+Se guarda en: >
 
-                                                          *kubectl-<C-n>*
-<C-n>       Toggle between current namespace and all namespaces
-            Refreshes the picker with pods from all namespaces or just the
-            current one.
+    stdpath('data')/kubectl-nvim/watchlist.json
+<
+Cada entrada es `{ context, namespace, name }`. Al renderizar se filtra por el
+contexto de kube activo, así que cambiar de cluster cambia la lista sin borrar
+nada.
 
-                                                          *kubectl-<C-s>*
-<C-s>       Select a specific namespace
-            Opens a namespace picker to choose a specific namespace. After
-            selection, shows pods from that namespace only.
-
-                                                          *kubectl-<C-f>*
-<C-f>       Force refresh (bypass cache)
-            Fetches fresh pod data from kubectl, ignoring cached results.
-
-                                                          *kubectl-<C-r>*
-<C-r>       Restart the selected deployment
-            Prompts for confirmation, then restarts the deployment using
-            kubectl rollout restart.
-
-                                                          *kubectl-<C-i>*
-<C-i>       Update image version for the selected container
-            Prompts for a new image tag, then updates the deployment spec.
-
-Log Buffer Keymaps ~
-
-q           Close the log buffer window
-
-<C-c>       Stop log streaming
-            Terminates the background kubectl logs job.
+El refresco agrupa las entradas por namespace: cinco deployments repartidos en
+dos namespaces son dos llamadas a kubectl, no cinco.
 
 ==============================================================================
-6. FEATURES                                               *kubectl-features*
+8. API DE LUA                                                      *kubectl-api*
 
-Smart Caching ~
+    require('kubectl').setup(opts)   Configura el plugin y crea |:Kubectl|
+    require('kubectl').open()        Abre el dashboard
+    require('kubectl').close()       Lo cierra y para todos los streams
+    require('kubectl').toggle()      Alterna
+    require('kubectl').refresh()     Fuerza un refresco
 
-The plugin caches kubectl output for 30 seconds (configurable) to reduce
-API load and improve performance. The cache is:
-  • Automatically invalidated after TTL expires
-  • Manually refreshable with <C-f>
-  • Namespace-aware (separate cache per namespace mode)
-  • Cleared when performing actions (restart, image update)
+Al salir de Neovim (|VimLeavePre|) se matan todos los procesos `kubectl logs`
+y el temporizador de refresco.
 
-Namespace Management ~
-
-Toggle between current namespace, all namespaces, or a specific namespace:
-  • Current namespace: Shows pods in the active kubectl context namespace
-  • All namespaces: Shows pods across all namespaces with namespace column
-  • Specific namespace: Shows pods in a user-selected namespace
-  • Toggle with <C-n> in the picker (cycles current <-> all)
-  • Select specific with <C-s> in the picker
-  • Initial mode configurable via `namespace_mode` option
-
-Display Information ~
-
-The picker shows:
-  • Pod/Container Name: Container name or pod name if single container
-  • Image: Full container image with tag
-  • Status: Container status (Running, Completed, Error, etc.)
-  • Age: Time since pod creation (e.g., 5m, 2h, 3d)
-  • Restarts: Number of container restarts
-  • Namespace: Shown only when viewing all namespaces
-
-Log Viewing ~
-
-Two output modes:
-  • tmux: Opens logs in a tmux split (backward compatible)
-  • buffer: Opens logs in a Neovim buffer with streaming
-
-Buffer mode features:
-  • Real-time streaming with vim.fn.jobstart
-  • Follow mode (auto-scroll to end)
-  • Circular buffer (10,000 line limit)
-  • Keymaps: q to close, <C-c> to stop streaming
-
-Deployment Actions ~
-
-  • Restart: Performs `kubectl rollout restart deployment/<name>`
-  • Update Image: Performs `kubectl set image deployment/<name> container=image:tag`
-
-Error Handling ~
-
-Specific error messages for common issues:
-  • Connection refused: Kubernetes API server unreachable
-  • Context not found: Invalid or missing kubectl context
-  • Forbidden: Insufficient RBAC permissions
-  • Timeout: API server not responding
-
-==============================================================================
-7. FAQ                                                         *kubectl-faq*
-
-Q: Cache is not working, I still see old data
-A: The cache TTL is 30 seconds by default. Press <C-f> to force refresh and
-   bypass the cache. You can also adjust `cache_ttl` in configuration.
-
-Q: Logs are not showing in buffer mode
-A: Ensure `log_output` is set to "buffer" in your configuration. If using
-   tmux mode, logs will open in a tmux split instead.
-
-Q: How do I see pods from all namespaces?
-A: Press <C-n> in the Telescope picker to toggle between current namespace
-   and all namespaces. You can also set `namespace_mode = "all"` in config
-   to start with all namespaces view.
-
-Q: Can I change the default log split direction?
-A: Yes, set `log_buffer_split` to "vsplit" (vertical), "split" (horizontal),
-   or "tabnew" (new tab) in your configuration.
-
-Q: How do I stop logs from auto-scrolling?
-A: Set `log_follow_mode = false` in your configuration. You can also press
-   <C-c> to stop the log stream.
-
-Q: Age calculation is incorrect
-A: The plugin uses UTC timestamps to match kubectl's output. If you still
-   see discrepancies, ensure your system time is synchronized.
-
-==============================================================================
-8. LICENSE                                                 *kubectl-license*
-
-MIT License
-
-Copyright (c) 2026 kubectl.nvim contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-==============================================================================
 vim:tw=78:ts=8:ft=help:norl:
