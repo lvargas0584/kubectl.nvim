@@ -1,0 +1,6 @@
+# Generado por :helptags; los gestores de plugins lo regeneran al instalar.
+doc/tags
+
+# Notas y borradores locales
+promt.txt
+*.local
