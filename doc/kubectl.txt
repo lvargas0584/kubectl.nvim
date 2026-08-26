@@ -101,6 +101,7 @@ EN LA WATCHLIST~
   e       Eventos del deployment
   K       describe: imagen completa, condiciones, réplicas
   T       Abrir los logs en un panel de tmux
+  <leader>F  Ampliar el panel de logs a pantalla completa (alterna)
   r       Refrescar ahora
   ?       Ayuda
   q       Cerrar el dashboard
@@ -116,6 +117,7 @@ EN UN PANEL DE LOGS~
   f         Alternar follow (auto-scroll)
   x         Cerrar este panel y matar su stream
   <C-c>     Parar el stream sin cerrar el panel
+  <leader>F Ampliar este panel; pulsar otra vez restaura el tamaño
   <Tab>     Volver a la watchlist
 
 Las acciones que no dependen de la fila enfocada (`a`, `n`, `r`, `?`) también

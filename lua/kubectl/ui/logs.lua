@@ -55,6 +55,7 @@ local function shared_keymaps(buf)
 		dash.focus()
 	end, "Back to the watchlist")
 	map("x", "<cmd>close<cr>", "Close this pane")
+	map("<leader>F", M.toggle_zoom, "Zoom the log pane")
 end
 
 --- Put a buffer into the log area. `new_pane` stacks a new window instead of
@@ -312,12 +313,53 @@ function M.open_tmux(row)
 end
 
 function M.close_all()
+	zoom_restore = nil -- the layout it described is about to disappear
 	for buf, _ in pairs(M.panes) do
 		if vim.api.nvim_buf_is_valid(buf) then
 			pcall(vim.api.nvim_buf_delete, buf, { force = true })
 		end
 	end
 	M.panes = {}
+end
+
+local zoom_restore -- window sizes captured before zooming, as a :winrestcmd
+
+--- Blow the log pane up to the full tab, or put everything back. The watchlist
+-- carries `winfixwidth`, which would otherwise refuse to give up its columns.
+function M.toggle_zoom()
+	local dash = require("kubectl.ui.dashboard")
+
+	if zoom_restore then
+		local restored = pcall(vim.cmd, zoom_restore)
+		zoom_restore = nil
+		if dash.is_open() then
+			vim.wo[dash.win].winfixwidth = true
+			if not restored then
+				vim.cmd("wincmd =") -- the layout changed while zoomed
+			end
+			dash.apply_width()
+		end
+		return
+	end
+
+	local current = vim.api.nvim_get_current_win()
+	local target = vim.b[vim.api.nvim_win_get_buf(current)].kubectl_pane and current or pane_wins()[1]
+	if not target then
+		return notify("no log pane is open", vim.log.levels.WARN)
+	end
+
+	zoom_restore = vim.fn.winrestcmd()
+	if dash.is_open() then
+		vim.wo[dash.win].winfixwidth = false
+	end
+	vim.api.nvim_set_current_win(target)
+	vim.cmd("wincmd |")
+	vim.cmd("wincmd _")
+end
+
+--- Is a pane currently zoomed? The dashboard asks before resizing itself.
+function M.is_zoomed()
+	return zoom_restore ~= nil
 end
 
 --- Move focus from the watchlist into the log area.

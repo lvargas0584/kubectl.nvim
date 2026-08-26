@@ -266,8 +266,11 @@ local function keymaps_of(b)
 	return out
 end
 
+-- nvim_buf_get_keymap devuelve <leader> ya resuelto a la tecla real.
+local ZOOM = (vim.g.mapleader or "\\") .. "F"
+
 local shared = keymaps_of(scratch)
-for _, k in ipairs({ "a", "n", "r", "?", "x", "<Tab>" }) do
+for _, k in ipairs({ "a", "n", "r", "?", "x", "<Tab>", ZOOM }) do
 	check(shared[k:lower()], "falta el atajo compartido " .. k .. " en el panel")
 end
 -- Un panel de `describe` no transmite nada: grep y tail no le corresponden.
@@ -295,9 +298,33 @@ for b, pane in pairs(logs.panes) do
 	end
 end
 local real = keymaps_of(real_pane_buf)
-for _, k in ipairs({ "a", "n", "r", "?", "x", "<Tab>", "g", "t", "f", "<C-c>" }) do
+for _, k in ipairs({ "a", "n", "r", "?", "x", "<Tab>", ZOOM, "g", "t", "f", "<C-c>" }) do
 	check(real[k:lower()], "falta el atajo " .. k .. " en un panel de logs")
 end
+
+-- --- zoom del panel de logs (<leader>F) ------------------------------------
+local pane_win = logs.focus() and vim.api.nvim_get_current_win()
+check(pane_win ~= nil, "no hay panel que ampliar")
+local before = { dash = vim.api.nvim_win_get_width(dash.win), pane = vim.api.nvim_win_get_width(pane_win) }
+
+logs.toggle_zoom()
+check(vim.api.nvim_win_get_width(pane_win) > before.pane, "el zoom no ensanchó el panel")
+check(vim.api.nvim_win_get_width(dash.win) < before.dash, "la watchlist no cedió sitio (¿winfixwidth?)")
+
+-- Un refresco (manual o del timer) NO debe deshacer el zoom.
+check(logs.is_zoomed(), "is_zoomed() debería estar activo")
+local zoomed_width = vim.api.nvim_win_get_width(pane_win)
+dash.render({ qa = { deployments = {}, pods = {} } })
+check(vim.api.nvim_win_get_width(pane_win) == zoomed_width, "el refresco deshizo el zoom")
+
+logs.toggle_zoom()
+check(not logs.is_zoomed(), "is_zoomed() debería estar apagado")
+check(vim.api.nvim_win_get_width(dash.win) == before.dash, "el segundo <leader>F no restauró la watchlist")
+check(vim.wo[dash.win].winfixwidth, "winfixwidth no se restauró tras el zoom")
+-- Y tras salir del zoom el refresco vuelve a mandar sobre el ancho.
+dash.render({ qa = { deployments = {}, pods = {} } })
+check(vim.api.nvim_win_get_width(dash.win) == before.dash, "el refresco ya no ajusta el ancho")
+
 
 -- Los atajos existen sobre el buffer del dashboard.
 local maps = {}

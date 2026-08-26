@@ -106,6 +106,7 @@ The focused row is the implicit subject of every action.
 | `K`     | `describe` — full image, conditions        |          |
 | `T`     | Open logs in a tmux pane instead           |          |
 | `r`     | Refresh now                                |          |
+| `<leader>F` | Zoom the log pane full width (toggle)  |          |
 | `?`     | Help                                       |          |
 | `q`     | Close                                      |          |
 
@@ -119,6 +120,7 @@ The focused row is the implicit subject of every action.
 | `f`       | Toggle follow (auto-scroll)                       |
 | `x`       | Close this pane and kill its stream               |
 | `<C-c>`   | Stop the stream, keep the pane                    |
+| `<leader>F` | Zoom this pane full width; press again to restore |
 | `<Tab>`   | Back to the watchlist                             |
 
 The row-independent actions — `a`, `n`, `r`, `?` — are mapped in the log panes

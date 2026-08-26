@@ -75,7 +75,9 @@ init.lua (setup, :Kubectl, VimLeavePre cleanup)
   windows*, not floats — that is what makes `/` search, `<C-w>` navigation,
   resize and multiple simultaneous panes free. A pane's buffer has
   `bufhidden = "wipe"` and a `BufWipeout` hook that kills its stream, so closing
-  a window is the only cleanup path needed. `kubectl` delivers chunks rather
+  a window is the only cleanup path needed. `toggle_zoom()` stores a
+  `winrestcmd()` snapshot; while it is set, `dashboard.apply_width()` returns
+  early so the refresh timer cannot snap a zoomed pane back mid-read. `kubectl` delivers chunks rather
   than lines, so `reader()` holds the trailing partial line back until its
   newline arrives.
 - **`actions.lua`** holds every mutation. All of them go through `M.confirm()`,

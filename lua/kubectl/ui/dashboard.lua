@@ -220,6 +220,7 @@ local function show_help()
 		" q     close                        ?  this help",
 		"",
 		" In a log pane:  / search   g grep   t tail   f follow   x close",
+		" <leader>F  zoom the log pane full width (again to restore)",
 		"",
 	}
 	local buf = vim.api.nvim_create_buf(false, true)
@@ -334,6 +335,9 @@ local function set_keymaps(buf)
 	for _, m in ipairs(M.global_keymaps) do
 		map(m[1], m[2], m[3])
 	end
+	map("<leader>F", function()
+		logs().toggle_zoom()
+	end, "Zoom the log pane")
 	map("q", M.close, "Close")
 end
 
@@ -391,6 +395,11 @@ end
 -- is capped at 60% of the tab so the log pane stays usable on a narrow terminal.
 function M.apply_width()
 	if not M.is_open() then
+		return
+	end
+	-- A refresh must not undo a <leader>F zoom: the timer fires every few
+	-- seconds and would snap the log pane back mid-read.
+	if require("kubectl.ui.logs").is_zoomed() then
 		return
 	end
 	local want = conf.get().watchlist_width
